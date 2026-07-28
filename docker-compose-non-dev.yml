@@ -137,10 +137,74 @@ services:
     healthcheck:
       disable: true
 
+  superset-mcp:
+    build:
+      <<: *common-build
+    container_name: superset_mcp
+    command: ["/app/docker/docker-bootstrap.sh", "mcp"]
+    env_file:
+      - path: docker/.env # default
+        required: true
+      - path: docker/.env-local # optional override
+        required: false
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${MCP_SERVICE_PORT:-5008}:5008
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    user: "root"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    volumes: *superset-volumes
+    healthcheck:
+      # The MCP server serves /mcp on 5008. Long start_period covers
+      # pip-installing requirements-local.txt (e.g. the Athena driver).
+      test:
+        - CMD-SHELL
+        - >-
+          curl -sf -o /dev/null -X POST http://localhost:5008/mcp
+          -H 'Content-Type: application/json'
+          -H 'Accept: application/json, text/event-stream'
+          -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  superset-chat:
+    build:
+      context: ./superset-ai-chat
+    container_name: superset_chat
+    env_file:
+      - path: docker/.env # default
+        required: true
+      - path: docker/.env-local # optional override (holds ANTHROPIC_AUTH_TOKEN etc.)
+        required: false
+    restart: unless-stopped
+    ports:
+      - ${CHAT_PORT:-8090}:8090
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Talk to the other compose services over the internal network.
+      SUPERSET_BASE_URL: "http://superset:8088"
+      MCP_URL: "http://superset-mcp:5008/mcp"
+      CHAT_DB_PATH: "/app/data/chat.db"
+    volumes:
+      - superset_chat_data:/app/data
+    depends_on:
+      superset:
+        condition: service_started
+      superset-mcp:
+        condition: service_started
+
 volumes:
   superset_home:
     external: false
   db_home:
     external: false
   redis:
+    external: false
+  superset_chat_data:
     external: false
