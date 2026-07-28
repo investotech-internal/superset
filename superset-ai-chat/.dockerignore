@@ -1,0 +1,5 @@
+# Add to .gitignore-style ignores for the chat app build context
+__pycache__/
+*.pyc
+.env
+.env.local

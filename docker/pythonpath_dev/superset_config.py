@@ -120,6 +120,11 @@ MCP_SERVICE_HOST = "0.0.0.0"
 MCP_SERVICE_PORT = int(os.environ.get("MCP_SERVICE_PORT", "5008"))
 MCP_AUTH_ENABLED = False
 MCP_DEV_USERNAME = os.environ.get("MCP_DEV_USERNAME", "admin")
+# Expose the full MCP toolset directly (list_datasets, generate_chart,
+# generate_dashboard, execute_sql, ...) instead of the compact
+# search_tools/call_tool gateway. This makes the AI chat agent's multi-step
+# dashboard-building flows more reliable at the cost of extra prompt context.
+MCP_TOOL_SEARCH_CONFIG = {"enabled": False}
 ALERT_REPORTS_NOTIFICATION_DRY_RUN = True
 WEBDRIVER_BASEURL = f"http://superset_app{os.environ.get('SUPERSET_APP_ROOT', '/')}/"  # When using docker compose baseurl should be http://superset_nginx{ENV{BASEPATH}}/  # noqa: E501
 # The base URL for the email report hyperlinks.

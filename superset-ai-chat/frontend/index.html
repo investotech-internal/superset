@@ -1,0 +1,122 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Superset AI Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  </head>
+  <body>
+    <!-- Login view -->
+    <div id="login-view" class="login-view hidden">
+      <form id="login-form" class="login-card">
+        <div class="brand">
+          <div class="brand-mark">✦</div>
+          <h1>Superset AI</h1>
+          <p>Chat with your data. Build charts and dashboards.</p>
+        </div>
+        <label>
+          <span>Username</span>
+          <input
+            id="login-username"
+            name="username"
+            autocomplete="username"
+            required
+          />
+        </label>
+        <label>
+          <span>Password</span>
+          <input
+            id="login-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <button type="submit" id="login-btn">Sign in</button>
+        <p id="login-error" class="login-error hidden"></p>
+        <p class="login-hint">Use your Apache Superset account.</p>
+      </form>
+    </div>
+
+    <!-- Chat view -->
+    <div id="chat-view" class="chat-view hidden">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="brand-mark small">✦</div>
+          <span>Superset AI</span>
+        </div>
+        <button id="new-chat-btn" class="new-chat-btn">+ New chat</button>
+        <div class="sidebar-spacer"></div>
+        <div class="user-box">
+          <div class="avatar" id="user-avatar">?</div>
+          <div class="user-meta">
+            <div id="user-name" class="user-name"></div>
+            <button id="logout-btn" class="logout-btn">Sign out</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="conversation">
+        <div id="messages" class="messages">
+          <div class="empty-state" id="empty-state">
+            <div class="brand-mark large">✦</div>
+            <h2>How can I help with your data?</h2>
+            <div class="suggestions">
+              <button class="suggestion">
+                List the datasets available to me
+              </button>
+              <button class="suggestion">
+                Build a dashboard of my sales data
+              </button>
+              <button class="suggestion">
+                Show total records per table as a bar chart
+              </button>
+              <button class="suggestion">
+                Run a SQL query and summarize the results
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="composer">
+          <form id="chat-form" class="composer-inner">
+            <textarea
+              id="chat-input"
+              placeholder="Message Superset AI…"
+              rows="1"
+              autocomplete="off"
+            ></textarea>
+            <button type="submit" id="send-btn" aria-label="Send">➤</button>
+          </form>
+          <div class="composer-hint">
+            The assistant can create and modify charts, dashboards and run SQL
+            in Superset.
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
