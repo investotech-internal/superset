@@ -29,8 +29,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY frontend ./frontend
 
-# Non-root runtime user
-RUN useradd --create-home --uid 1000 appuser && chown -R appuser /app
+# Non-root runtime user. Pre-create the data dir so the mounted named volume
+# inherits appuser ownership and the SQLite chat store is writable.
+RUN useradd --create-home --uid 1000 appuser \
+	&& mkdir -p /app/data \
+	&& chown -R appuser /app
 USER appuser
 
 EXPOSE 8090

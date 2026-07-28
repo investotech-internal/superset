@@ -208,6 +208,66 @@ body {
   border-color: var(--accent);
 }
 
+.conversation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.conv-item {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+  padding: 0 2px 0 8px;
+}
+
+.conv-item:hover {
+  background: var(--bg-elev-2);
+}
+
+.conv-item.active {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+}
+
+.conv-title {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 9px 4px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conv-del {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  opacity: 0;
+}
+
+.conv-item:hover .conv-del,
+.conv-item.active .conv-del {
+  opacity: 1;
+}
+
+.conv-del:hover {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+}
+
 .sidebar-spacer {
   flex: 1;
 }

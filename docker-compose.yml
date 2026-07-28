@@ -186,6 +186,9 @@ services:
       # Talk to the other compose services over the internal network.
       SUPERSET_BASE_URL: "http://superset:8088"
       MCP_URL: "http://superset-mcp:5008/mcp"
+      CHAT_DB_PATH: "/app/data/chat.db"
+    volumes:
+      - superset_chat_data:/app/data
     depends_on:
       superset:
         condition: service_started
@@ -366,4 +369,6 @@ volumes:
   redis:
     external: false
   superset_data:
+    external: false
+  superset_chat_data:
     external: false

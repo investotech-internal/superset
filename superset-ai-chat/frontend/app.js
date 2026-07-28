@@ -38,10 +38,13 @@
   const logoutBtn = document.getElementById("logout-btn");
   const userNameEl = document.getElementById("user-name");
   const userAvatarEl = document.getElementById("user-avatar");
+  const convListEl = document.getElementById("conversation-list");
 
   // ---- conversation state (Anthropic message format) ----
   let history = [];
   let streaming = false;
+  let currentConversationId = null;
+  let conversations = [];
 
   marked.setOptions({ breaks: true, gfm: true });
 
@@ -66,6 +69,15 @@
     userNameEl.textContent = name;
     userAvatarEl.textContent = name.charAt(0);
     chatInput.focus();
+    loadConversations();
+  }
+
+  function resetChatUI() {
+    messagesEl.innerHTML = "";
+    if (emptyState) {
+      messagesEl.appendChild(emptyState);
+      emptyState.classList.remove("hidden");
+    }
   }
 
   // ---- message DOM helpers ----
@@ -94,6 +106,136 @@
     return name.replace(/_/g, " ");
   }
 
+  // ---- conversation persistence ----
+  async function loadConversations() {
+    try {
+      const resp = await fetch("/api/conversations");
+      if (!resp.ok) return;
+      conversations = await resp.json();
+      renderConversationList();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  function renderConversationList() {
+    if (!convListEl) return;
+    convListEl.innerHTML = "";
+    conversations.forEach((c) => {
+      const item = document.createElement("div");
+      item.className =
+        "conv-item" + (c.id === currentConversationId ? " active" : "");
+
+      const title = document.createElement("button");
+      title.className = "conv-title";
+      title.textContent = c.title || "New chat";
+      title.title = c.title || "New chat";
+      title.addEventListener("click", () => openConversation(c.id));
+
+      const del = document.createElement("button");
+      del.className = "conv-del";
+      del.setAttribute("aria-label", "Delete chat");
+      del.textContent = "\u2715";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteConversation(c.id);
+      });
+
+      item.appendChild(title);
+      item.appendChild(del);
+      convListEl.appendChild(item);
+    });
+  }
+
+  function renderHistory() {
+    resetChatUI();
+    if (emptyState) emptyState.classList.add("hidden");
+    history.forEach((m) => {
+      const content =
+        typeof m.content === "string"
+          ? m.content
+          : JSON.stringify(m.content, null, 2);
+      if (m.role === "user") {
+        const body = addMessageRow("user");
+        body.textContent = content;
+      } else {
+        const body = addMessageRow("assistant");
+        const span = document.createElement("div");
+        span.className = "assistant-text";
+        span.innerHTML = renderMarkdown(content);
+        body.appendChild(span);
+      }
+    });
+    scrollToBottom();
+  }
+
+  async function openConversation(id) {
+    if (streaming) return;
+    try {
+      const resp = await fetch("/api/conversations/" + encodeURIComponent(id));
+      if (!resp.ok) return;
+      const conv = await resp.json();
+      currentConversationId = conv.id;
+      history = Array.isArray(conv.messages) ? conv.messages : [];
+      renderHistory();
+      renderConversationList();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  async function deleteConversation(id) {
+    if (!window.confirm("Delete this chat?")) return;
+    try {
+      const resp = await fetch("/api/conversations/" + encodeURIComponent(id), {
+        method: "DELETE",
+      });
+      if (!resp.ok) return;
+      if (id === currentConversationId) {
+        currentConversationId = null;
+        history = [];
+        resetChatUI();
+      }
+      loadConversations();
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  async function ensureConversation(firstText) {
+    if (currentConversationId) return;
+    try {
+      const resp = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: firstText.slice(0, 80) }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        currentConversationId = data.id;
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  async function persistConversation() {
+    if (!currentConversationId || !history.length) return;
+    try {
+      await fetch(
+        "/api/conversations/" + encodeURIComponent(currentConversationId),
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: history }),
+        },
+      );
+    } catch (e) {
+      /* ignore */
+    }
+    loadConversations();
+  }
+
   // ---- send a turn ----
   async function sendMessage(text) {
     if (streaming || !text.trim()) return;
@@ -104,6 +246,9 @@
     const userBody = addMessageRow("user");
     userBody.textContent = text;
     history.push({ role: "user", content: text });
+
+    // create a conversation on first message so it shows in the sidebar
+    await ensureConversation(text);
 
     // assistant container
     const assistantBody = addMessageRow("assistant");
@@ -213,6 +358,7 @@
       sendBtn.disabled = false;
       chatInput.focus();
       scrollToBottom();
+      persistConversation();
     }
   }
 
@@ -248,19 +394,20 @@
   logoutBtn.addEventListener("click", async () => {
     await fetch("/api/logout", { method: "POST" });
     history = [];
+    currentConversationId = null;
+    conversations = [];
+    if (convListEl) convListEl.innerHTML = "";
     messagesEl.innerHTML = "";
     showLogin();
   });
 
   newChatBtn.addEventListener("click", () => {
     if (streaming) return;
+    currentConversationId = null;
     history = [];
-    messagesEl.innerHTML = "";
-    if (emptyState) {
-      messagesEl.appendChild(emptyState);
-      emptyState.classList.remove("hidden");
-    }
-    location.reload();
+    resetChatUI();
+    renderConversationList();
+    chatInput.focus();
   });
 
   chatForm.addEventListener("submit", (e) => {

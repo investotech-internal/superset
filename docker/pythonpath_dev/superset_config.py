@@ -127,9 +127,12 @@ MCP_DEV_USERNAME = os.environ.get("MCP_DEV_USERNAME", "admin")
 MCP_TOOL_SEARCH_CONFIG = {"enabled": False}
 ALERT_REPORTS_NOTIFICATION_DRY_RUN = True
 WEBDRIVER_BASEURL = f"http://superset_app{os.environ.get('SUPERSET_APP_ROOT', '/')}/"  # When using docker compose baseurl should be http://superset_nginx{ENV{BASEPATH}}/  # noqa: E501
-# The base URL for the email report hyperlinks.
+# The base URL for user-facing hyperlinks (email reports, and the links the MCP
+# AI agent returns for charts/dashboards/explore). Must match the port users
+# actually reach Superset on (SUPERSET_PORT, default 8088).
 WEBDRIVER_BASEURL_USER_FRIENDLY = (
-    f"http://localhost:8888/{os.environ.get('SUPERSET_APP_ROOT', '/')}/"
+    f"http://localhost:{os.environ.get('SUPERSET_PORT', '8088')}/"
+    f"{os.environ.get('SUPERSET_APP_ROOT', '/')}/"
 )
 SQLLAB_CTAS_NO_LIMIT = True
 

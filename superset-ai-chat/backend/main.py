@@ -18,10 +18,16 @@
 """FastAPI application for the Superset AI Chat app.
 
 Serves a single-page chat UI and exposes:
-  POST /api/login   -> validate Superset credentials, set session cookie
-  POST /api/logout  -> clear session
-  GET  /api/me      -> current session info
-  POST /api/chat    -> stream an agent turn over Server-Sent Events
+  POST   /api/login              -> validate Superset credentials, set cookie
+  POST   /api/logout             -> clear session
+  GET    /api/me                 -> current session info
+  POST   /api/chat               -> stream an agent turn over Server-Sent Events
+  GET    /api/conversations      -> list the current user's saved chats
+  POST   /api/conversations      -> create a new chat
+  GET    /api/conversations/{id} -> load a saved chat
+  PUT    /api/conversations/{id} -> save a chat's messages/title
+  DELETE /api/conversations/{id} -> delete a chat
+  DELETE /api/conversations      -> delete all of the user's chats
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, config
+from . import auth, config, store
 from .agent import run_agent
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +67,15 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(default_factory=list)
+
+
+class CreateConversationRequest(BaseModel):
+    title: str = Field(default="New chat", max_length=200)
+
+
+class SaveConversationRequest(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
     messages: list[ChatMessage] = Field(default_factory=list)
 
 
@@ -151,6 +166,75 @@ async def chat(
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# Conversation persistence (per user)
+# --------------------------------------------------------------------------
+@app.get("/api/conversations")
+async def list_conversations(
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> list[dict[str, Any]]:
+    claims = _require_session(session)
+    return await store.list_conversations(claims["sub"])
+
+
+@app.post("/api/conversations")
+async def create_conversation(
+    req: CreateConversationRequest,
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, Any]:
+    claims = _require_session(session)
+    return await store.create_conversation(claims["sub"], req.title)
+
+
+@app.get("/api/conversations/{conv_id}")
+async def get_conversation(
+    conv_id: str,
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, Any]:
+    claims = _require_session(session)
+    conv = await store.get_conversation(claims["sub"], conv_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+
+@app.put("/api/conversations/{conv_id}")
+async def save_conversation(
+    conv_id: str,
+    req: SaveConversationRequest,
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, bool]:
+    claims = _require_session(session)
+    messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    ok = await store.save_conversation(
+        claims["sub"], conv_id, req.title, messages
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True}
+
+
+@app.delete("/api/conversations/{conv_id}")
+async def delete_conversation(
+    conv_id: str,
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, bool]:
+    claims = _require_session(session)
+    ok = await store.delete_conversation(claims["sub"], conv_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True}
+
+
+@app.delete("/api/conversations")
+async def delete_all_conversations(
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, int]:
+    claims = _require_session(session)
+    deleted = await store.delete_all_conversations(claims["sub"])
+    return {"deleted": deleted}
 
 
 # --------------------------------------------------------------------------
