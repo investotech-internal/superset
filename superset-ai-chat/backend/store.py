@@ -65,6 +65,24 @@ def _init() -> None:
             "CREATE INDEX IF NOT EXISTS idx_conv_user "
             "ON conversations(username, updated_at DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_tasks (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                status TEXT NOT NULL,
+                assistant_text TEXT NOT NULL DEFAULT '',
+                error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_tasks_conversation "
+            "ON chat_tasks(conversation_id, username, updated_at DESC)"
+        )
 
 
 _init()
@@ -104,6 +122,109 @@ def _get(username: str, conv_id: str) -> dict[str, Any] | None:
         "messages": json.loads(row["messages"]),
         "updated_at": row["updated_at"],
     }
+
+
+def _append_message(username: str, conv_id: str, message: dict[str, Any]) -> bool:
+    now = time.time()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT messages FROM conversations WHERE id = ? AND username = ?",
+            (conv_id, username),
+        ).fetchone()
+        if row is None:
+            return False
+        messages = json.loads(row["messages"])
+        messages.append(message)
+        conn.execute(
+            "UPDATE conversations SET messages = ?, updated_at = ? "
+            "WHERE id = ? AND username = ?",
+            (json.dumps(messages), now, conv_id, username),
+        )
+    return True
+
+
+def _create_chat_task(username: str, conv_id: str) -> dict[str, Any] | None:
+    now = time.time()
+    task_id = str(uuid.uuid4())
+    with _connect() as conn:
+        conversation = conn.execute(
+            "SELECT 1 FROM conversations WHERE id = ? AND username = ?",
+            (conv_id, username),
+        ).fetchone()
+        if conversation is None:
+            return None
+        active = conn.execute(
+            "SELECT id FROM chat_tasks WHERE conversation_id = ? AND username = ? "
+            "AND status = 'running' ORDER BY created_at DESC LIMIT 1",
+            (conv_id, username),
+        ).fetchone()
+        if active is not None:
+            return {"id": active["id"], "status": "running", "created": False}
+        conn.execute(
+            "INSERT INTO chat_tasks "
+            "(id, conversation_id, username, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'running', ?, ?)",
+            (task_id, conv_id, username, now, now),
+        )
+    return {"id": task_id, "status": "running", "created": True}
+
+
+def _get_chat_task(username: str, task_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, conversation_id, status, assistant_text, error "
+            "FROM chat_tasks WHERE id = ? AND username = ?",
+            (task_id, username),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _get_active_chat_task(username: str, conv_id: str) -> dict[str, Any] | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT id, status FROM chat_tasks WHERE conversation_id = ? "
+            "AND username = ? AND status = 'running' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (conv_id, username),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _complete_chat_task(
+    username: str, task_id: str, assistant_text: str, error: str | None
+) -> None:
+    now = time.time()
+    status = "failed" if error else "complete"
+    with _connect() as conn:
+        task = conn.execute(
+            "SELECT conversation_id FROM chat_tasks WHERE id = ? AND username = ?",
+            (task_id, username),
+        ).fetchone()
+        if task is None:
+            return
+        if assistant_text:
+            conversation = conn.execute(
+                "SELECT messages FROM conversations WHERE id = ? AND username = ?",
+                (task["conversation_id"], username),
+            ).fetchone()
+            if conversation is not None:
+                messages = json.loads(conversation["messages"])
+                messages.append({"role": "assistant", "content": assistant_text})
+                conn.execute(
+                    "UPDATE conversations SET messages = ?, updated_at = ? "
+                    "WHERE id = ? AND username = ?",
+                    (
+                        json.dumps(messages),
+                        now,
+                        task["conversation_id"],
+                        username,
+                    ),
+                )
+        conn.execute(
+            "UPDATE chat_tasks SET status = ?, assistant_text = ?, error = ?, "
+            "updated_at = ? WHERE id = ? AND username = ?",
+            (status, assistant_text, error, now, task_id, username),
+        )
 
 
 def _create(username: str, title: str) -> dict[str, Any]:
@@ -166,6 +287,32 @@ async def list_conversations(username: str) -> list[dict[str, Any]]:
 
 async def get_conversation(username: str, conv_id: str) -> dict[str, Any] | None:
     return await asyncio.to_thread(_get, username, conv_id)
+
+
+async def append_message(
+    username: str, conv_id: str, message: dict[str, Any]
+) -> bool:
+    return await asyncio.to_thread(_append_message, username, conv_id, message)
+
+
+async def create_chat_task(username: str, conv_id: str) -> dict[str, Any] | None:
+    return await asyncio.to_thread(_create_chat_task, username, conv_id)
+
+
+async def get_chat_task(username: str, task_id: str) -> dict[str, Any] | None:
+    return await asyncio.to_thread(_get_chat_task, username, task_id)
+
+
+async def get_active_chat_task(
+    username: str, conv_id: str
+) -> dict[str, Any] | None:
+    return await asyncio.to_thread(_get_active_chat_task, username, conv_id)
+
+
+async def complete_chat_task(
+    username: str, task_id: str, assistant_text: str, error: str | None
+) -> None:
+    await asyncio.to_thread(_complete_chat_task, username, task_id, assistant_text, error)
 
 
 async def create_conversation(username: str, title: str) -> dict[str, Any]:

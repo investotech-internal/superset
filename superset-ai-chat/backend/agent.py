@@ -31,10 +31,14 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, AsyncGenerator
 
-from anthropic import AsyncAnthropic
+import httpx
+import jwt
+from anthropic import AsyncAnthropic, RateLimitError
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
 from . import config
 
@@ -105,8 +109,33 @@ async def _load_tools(session: Client) -> list[dict[str, Any]]:
     return tools
 
 
+def _mcp_connection_target(username: str) -> str | Any:
+    """Build the MCP connection target for one agent run.
+
+    When MCP_JWT_SECRET is configured, mints a short-lived HS256 JWT for the
+    given Superset username and attaches it as a Bearer token, so the MCP
+    server enforces RBAC for that specific user instead of a single shared
+    MCP_DEV_USERNAME identity. Falls back to a plain URL (unauthenticated dev
+    mode) when no JWT secret is configured.
+    """
+    if not config.MCP_JWT_SECRET:
+        return config.MCP_URL
+
+    now = int(time.time())
+    claims: dict[str, Any] = {"sub": username, "iat": now, "exp": now + config.MCP_JWT_TTL_SECONDS}
+    if config.MCP_JWT_ISSUER:
+        claims["iss"] = config.MCP_JWT_ISSUER
+    if config.MCP_JWT_AUDIENCE:
+        claims["aud"] = config.MCP_JWT_AUDIENCE
+    token = jwt.encode(claims, config.MCP_JWT_SECRET, algorithm="HS256")
+
+    http_client = httpx.AsyncClient(headers={"Authorization": f"Bearer {token}"})
+    return streamable_http_client(config.MCP_URL, http_client=http_client)
+
+
 async def run_agent(
     messages: list[dict[str, Any]],
+    username: str = "",
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Run the agent for one user turn, yielding streaming events.
 
@@ -136,21 +165,48 @@ async def run_agent(
     )
 
     try:
-        async with Client(config.MCP_URL) as session:
+        async with Client(_mcp_connection_target(username)) as session:
             tools = await _load_tools(session)
             logger.info("Loaded %d MCP tools", len(tools))
 
+            model_chain = config.CHAT_MODELS
+            model_index = 0
+
             for _ in range(config.MAX_TOOL_ITERATIONS):
-                async with llm.messages.stream(
-                    model=config.CHAT_MODEL,
-                    max_tokens=config.MAX_TOKENS,
-                    system=SYSTEM_PROMPT,
-                    tools=tools,
-                    messages=messages,
-                ) as stream:
-                    async for text in stream.text_stream:
-                        yield {"type": "text", "text": text}
-                    final = await stream.get_final_message()
+                while True:
+                    current_model = model_chain[model_index]
+                    try:
+                        async with llm.messages.stream(
+                            model=current_model,
+                            max_tokens=config.MAX_TOKENS,
+                            system=SYSTEM_PROMPT,
+                            tools=tools,
+                            messages=messages,
+                        ) as stream:
+                            async for text in stream.text_stream:
+                                yield {"type": "text", "text": text}
+                            final = await stream.get_final_message()
+                        break
+                    except RateLimitError as exc:
+                        if model_index + 1 >= len(model_chain):
+                            raise
+                        next_model = model_chain[model_index + 1]
+                        logger.warning(
+                            "Model %s rate-limited/out of quota (%s); "
+                            "falling back to %s",
+                            current_model,
+                            exc,
+                            next_model,
+                        )
+                        yield {
+                            "type": "text",
+                            "text": (
+                                f"\n\n_(“{current_model}” is rate-limited or "
+                                f"out of quota -- retrying with "
+                                f"“{next_model}”.)_\n\n"
+                            ),
+                        }
+                        model_index += 1
 
                 # Record the assistant message verbatim for the next round.
                 assistant_blocks = [block.model_dump() for block in final.content]
@@ -204,8 +260,31 @@ async def run_agent(
                 }
     except Exception as exc:  # noqa: BLE001
         logger.exception("Agent run failed")
-        yield {"type": "error", "message": f"Agent error: {exc}"}
+        yield {"type": "error", "message": f"Agent error: {_root_cause_message(exc)}"}
     finally:
         await llm.close()
+
+
+def _root_cause_message(exc: BaseException) -> str:
+    """Unwrap ExceptionGroup/BaseExceptionGroup wrappers (raised by anyio
+    TaskGroups inside the MCP client and Anthropic SDK) to surface the
+    innermost, actionable error instead of a generic "unhandled errors in a
+    TaskGroup" message.
+    """
+    seen: set[int] = set()
+    current: BaseException = exc
+    while True:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        sub_exceptions = getattr(current, "exceptions", None)
+        if sub_exceptions:
+            current = sub_exceptions[0]
+            continue
+        if current.__cause__ is not None:
+            current = current.__cause__
+            continue
+        break
+    return f"{type(current).__name__}: {current}"
 
     yield {"type": "done"}

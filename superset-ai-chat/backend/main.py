@@ -32,13 +32,13 @@ Serves a single-page chat UI and exposes:
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Cookie, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    conversation_id: str = Field(min_length=1, max_length=64)
     messages: list[ChatMessage] = Field(default_factory=list)
 
 
@@ -126,6 +127,10 @@ def _require_session(token: Optional[str]) -> dict[str, Any]:
     claims = auth.decode_session_token(token)
     if not claims:
         raise HTTPException(status_code=401, detail="Session expired")
+    if config.CHAT_ALLOWED_USERNAMES and claims["sub"] not in config.CHAT_ALLOWED_USERNAMES:
+        # Invalidates sessions issued before this restriction was enabled,
+        # not just new login attempts.
+        raise HTTPException(status_code=401, detail="Session no longer authorized")
     return claims
 
 
@@ -138,6 +143,13 @@ async def login(req: LoginRequest, response: Response) -> dict[str, Any]:
         user = await auth.verify_superset_credentials(req.username, req.password)
     except auth.AuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    if config.CHAT_ALLOWED_USERNAMES and user["username"] not in config.CHAT_ALLOWED_USERNAMES:
+        # Valid Superset credentials, but this deployment restricts chat
+        # access to a specific allowlist of usernames.
+        raise HTTPException(
+            status_code=403, detail="This chat is restricted to authorized users."
+        )
 
     token = auth.issue_session_token(user)
     response.set_cookie(
@@ -166,14 +178,33 @@ async def me(
 
 
 # --------------------------------------------------------------------------
-# Chat route (SSE streaming)
+# Chat tasks
 # --------------------------------------------------------------------------
+async def _run_chat_task(
+    username: str, task_id: str, messages: list[dict[str, Any]]
+) -> None:
+    """Run an agent turn independently from the request that started it."""
+    assistant_text = ""
+    error: str | None = None
+    try:
+        async for event in run_agent(messages, username=username):
+            if event.get("type") == "text":
+                assistant_text += str(event.get("text", ""))
+            elif event.get("type") == "error":
+                error = str(event.get("message", "Agent task failed."))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Chat task %s failed", task_id)
+        error = str(exc)
+    finally:
+        await store.complete_chat_task(username, task_id, assistant_text, error)
+
+
 @app.post("/api/chat")
 async def chat(
     req: ChatRequest,
     session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
-) -> StreamingResponse:
-    _require_session(session)
+) -> dict[str, str]:
+    claims = _require_session(session)
 
     # Convert to plain Anthropic-format messages.
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
@@ -182,25 +213,29 @@ async def chat(
     for m in messages:
         _validate_message_content(m["content"])
 
-    async def event_stream() -> Any:
-        try:
-            async for event in run_agent(messages):
-                yield f"data: {json.dumps(event)}\n\n"
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Chat stream failed")
-            err = {"type": "error", "message": str(exc)}
-            yield f"data: {json.dumps(err)}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    task = await store.create_chat_task(claims["sub"], req.conversation_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if task["created"]:
+        appended = await store.append_message(
+            claims["sub"], req.conversation_id, messages[-1]
+        )
+        if not appended:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        asyncio.create_task(_run_chat_task(claims["sub"], task["id"], messages))
+    return {"task_id": task["id"], "status": task["status"]}
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
+
+@app.get("/api/chat/{task_id}")
+async def get_chat_task(
+    task_id: str,
+    session: Optional[str] = Cookie(default=None, alias=config.COOKIE_NAME),
+) -> dict[str, Any]:
+    claims = _require_session(session)
+    task = await store.get_chat_task(claims["sub"], task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Chat task not found")
+    return task
 
 
 @app.get("/api/health")
@@ -237,6 +272,7 @@ async def get_conversation(
     conv = await store.get_conversation(claims["sub"], conv_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    conv["active_task"] = await store.get_active_chat_task(claims["sub"], conv_id)
     return conv
 
 
