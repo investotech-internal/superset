@@ -160,13 +160,17 @@ services:
     healthcheck:
       # The MCP server serves /mcp on 5008. Long start_period covers
       # pip-installing requirements-local.txt (e.g. the Athena driver).
+      # Accept both 200 (unauthenticated dev mode) and 401 (JWT auth enabled,
+      # MCP_JWT_SECRET set) as "healthy" -- either response proves the server
+      # itself is up; only a connection failure (curl exit != 0) means down.
       test:
         - CMD-SHELL
         - >-
-          curl -sf -o /dev/null -X POST http://localhost:5008/mcp
+          code=$$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:5008/mcp
           -H 'Content-Type: application/json'
           -H 'Accept: application/json, text/event-stream'
-          -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+          -d '{"jsonrpc":"2.0","method":"tools/list","id":1}');
+          [ "$$code" = "200" ] || [ "$$code" = "401" ]
       interval: 30s
       timeout: 10s
       retries: 5

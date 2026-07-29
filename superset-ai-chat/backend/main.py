@@ -216,6 +216,18 @@ async def chat(
     task = await store.create_chat_task(claims["sub"], req.conversation_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if task["busy"]:
+        # A task is already running in a different conversation for this
+        # user -- only one chat job may run at a time (bounds LLM/MCP
+        # concurrency and cost), so reject rather than run in parallel.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Another chat request is still running in a different "
+                "conversation. Wait for it to finish before sending a new "
+                "message."
+            ),
+        )
     if task["created"]:
         appended = await store.append_message(
             claims["sub"], req.conversation_id, messages[-1]

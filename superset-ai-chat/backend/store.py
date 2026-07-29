@@ -153,20 +153,30 @@ def _create_chat_task(username: str, conv_id: str) -> dict[str, Any] | None:
         ).fetchone()
         if conversation is None:
             return None
+        # Only one chat task may run at a time per user, across all of their
+        # conversations -- this keeps LLM/MCP concurrency (and cost) bounded
+        # to a single in-flight job, even if the user has multiple tabs/chats
+        # open.
         active = conn.execute(
-            "SELECT id FROM chat_tasks WHERE conversation_id = ? AND username = ? "
+            "SELECT id, conversation_id FROM chat_tasks WHERE username = ? "
             "AND status = 'running' ORDER BY created_at DESC LIMIT 1",
-            (conv_id, username),
+            (username,),
         ).fetchone()
         if active is not None:
-            return {"id": active["id"], "status": "running", "created": False}
+            same_conversation = active["conversation_id"] == conv_id
+            return {
+                "id": active["id"],
+                "status": "running",
+                "created": False,
+                "busy": not same_conversation,
+            }
         conn.execute(
             "INSERT INTO chat_tasks "
             "(id, conversation_id, username, status, created_at, updated_at) "
             "VALUES (?, ?, ?, 'running', ?, ?)",
             (task_id, conv_id, username, now, now),
         )
-    return {"id": task_id, "status": "running", "created": True}
+    return {"id": task_id, "status": "running", "created": True, "busy": False}
 
 
 def _get_chat_task(username: str, task_id: str) -> dict[str, Any] | None:
