@@ -75,6 +75,13 @@
     "image/gif",
     "image/webp",
   ];
+  const IMAGE_TYPE_BY_EXTENSION = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+  };
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
   const MAX_ATTACHMENTS = 4;
 
@@ -96,7 +103,13 @@
   }
 
   // ---- image attachments ----
-  function fileToAttachment(file) {
+  function imageMediaType(file) {
+    if (ALLOWED_IMAGE_TYPES.includes(file.type)) return file.type;
+    const extension = file.name.split(".").pop().toLowerCase();
+    return IMAGE_TYPE_BY_EXTENSION[extension] || null;
+  }
+
+  function fileToAttachment(file, mediaType) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -105,7 +118,7 @@
         resolve({
           id: Math.random().toString(36).slice(2),
           name: file.name,
-          mediaType: file.type,
+          mediaType,
           base64,
         });
       };
@@ -123,12 +136,17 @@
   }
 
   async function addFiles(fileList) {
-    const files = Array.from(fileList || []).filter((f) =>
-      ALLOWED_IMAGE_TYPES.includes(f.type),
-    );
+    const files = Array.from(fileList || []);
     if (!files.length) return;
 
     for (const file of files) {
+      const mediaType = imageMediaType(file);
+      if (!mediaType) {
+        attachmentError(
+          `"${file.name || "Clipboard image"}" is not a supported image. Use PNG, JPEG, GIF, or WEBP.`,
+        );
+        continue;
+      }
       if (pendingAttachments.length >= MAX_ATTACHMENTS) {
         attachmentError(
           `You can attach up to ${MAX_ATTACHMENTS} images per message.`,
@@ -140,7 +158,7 @@
         continue;
       }
       try {
-        const attachment = await fileToAttachment(file);
+        const attachment = await fileToAttachment(file, mediaType);
         pendingAttachments.push(attachment);
       } catch (e) {
         attachmentError(`Could not read "${file.name}".`);
@@ -420,7 +438,10 @@
         type: "image",
         source: { type: "base64", media_type: a.mediaType, data: a.base64 },
       }));
-      if (text.trim()) content.push({ type: "text", text });
+      content.push({
+        type: "text",
+        text: text.trim() || "Please analyze the attached image(s).",
+      });
     } else {
       content = text;
     }
@@ -635,7 +656,7 @@
   chatInput.addEventListener("paste", (e) => {
     const items = Array.from(e.clipboardData ? e.clipboardData.items : []);
     const imageFiles = items
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter(Boolean);
     if (imageFiles.length) {
