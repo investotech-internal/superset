@@ -101,7 +101,27 @@
           </div>
         </div>
         <div class="composer">
+          <div
+            id="attachment-previews"
+            class="attachment-previews hidden"
+          ></div>
           <form id="chat-form" class="composer-inner">
+            <input
+              id="image-input"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              class="hidden"
+            />
+            <button
+              type="button"
+              id="attach-btn"
+              class="attach-btn"
+              aria-label="Attach image"
+              title="Attach image"
+            >
+              📎
+            </button>
             <textarea
               id="chat-input"
               placeholder="Message Superset AI…"
@@ -112,7 +132,7 @@
           </form>
           <div class="composer-hint">
             The assistant can create and modify charts, dashboards and run SQL
-            in Superset.
+            in Superset. You can paste or attach images (PNG, JPEG, GIF, WEBP).
           </div>
         </div>
       </main>

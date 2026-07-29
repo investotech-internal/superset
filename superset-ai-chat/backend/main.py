@@ -80,6 +80,44 @@ class SaveConversationRequest(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# Image attachment validation
+# --------------------------------------------------------------------------
+# Anthropic's vision API only accepts these formats. Base64 length is capped
+# at roughly 5MB decoded (base64 inflates size by ~4/3) to bound per-request
+# cost/latency and stop a client from bypassing the frontend's own limits and
+# sending oversized or malformed payloads directly to this API.
+ALLOWED_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+MAX_IMAGE_BASE64_CHARS = 7_000_000
+MAX_IMAGES_PER_MESSAGE = 4
+
+
+def _validate_message_content(content: Any) -> None:
+    """Reject messages with unsupported or oversized image attachments."""
+    if not isinstance(content, list):
+        return
+    image_count = 0
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        image_count += 1
+        if image_count > MAX_IMAGES_PER_MESSAGE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many images in one message (max {MAX_IMAGES_PER_MESSAGE}).",
+            )
+        source = block.get("source") or {}
+        if (
+            not isinstance(source, dict)
+            or source.get("type") != "base64"
+            or source.get("media_type") not in ALLOWED_IMAGE_MEDIA_TYPES
+        ):
+            raise HTTPException(status_code=400, detail="Unsupported image type.")
+        data = source.get("data")
+        if not isinstance(data, str) or len(data) > MAX_IMAGE_BASE64_CHARS:
+            raise HTTPException(status_code=400, detail="Image is too large.")
+
+
+# --------------------------------------------------------------------------
 # Session helpers
 # --------------------------------------------------------------------------
 def _require_session(token: Optional[str]) -> dict[str, Any]:
@@ -141,6 +179,8 @@ async def chat(
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
+    for m in messages:
+        _validate_message_content(m["content"])
 
     async def event_stream() -> Any:
         try:
@@ -208,6 +248,8 @@ async def save_conversation(
 ) -> dict[str, bool]:
     claims = _require_session(session)
     messages = [{"role": m.role, "content": m.content} for m in req.messages]
+    for m in messages:
+        _validate_message_content(m["content"])
     ok = await store.save_conversation(
         claims["sub"], conv_id, req.title, messages
     )

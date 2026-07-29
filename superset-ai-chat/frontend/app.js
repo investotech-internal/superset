@@ -39,6 +39,9 @@
   const userNameEl = document.getElementById("user-name");
   const userAvatarEl = document.getElementById("user-avatar");
   const convListEl = document.getElementById("conversation-list");
+  const attachBtn = document.getElementById("attach-btn");
+  const imageInput = document.getElementById("image-input");
+  const attachmentPreviewsEl = document.getElementById("attachment-previews");
 
   // ---- conversation state (Anthropic message format) ----
   let history = [];
@@ -46,11 +49,165 @@
   let currentConversationId = null;
   let conversations = [];
 
-  marked.setOptions({ breaks: true, gfm: true });
+  // Keep the selected conversation through a refresh in this browser tab.
+  // sessionStorage intentionally scopes the selection to a single tab and
+  // clears it when the tab closes, avoiding cross-user/tab chat restoration.
+  const ACTIVE_CONVERSATION_STORAGE_KEY = "superset-ai-chat.activeConversation";
+
+  function saveActiveConversation(id) {
+    if (id) {
+      sessionStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, id);
+    } else {
+      sessionStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+    }
+  }
+
+  function getSavedActiveConversation() {
+    return sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+  }
+
+  // Pending image attachments for the message currently being composed.
+  // Each entry: { id, name, mediaType, base64 (raw, no data: prefix) }.
+  let pendingAttachments = [];
+  const ALLOWED_IMAGE_TYPES = [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+  ];
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
+  const MAX_ATTACHMENTS = 4;
+
+  // Force every markdown-rendered link to open in a new tab, with the
+  // recommended rel attributes to avoid giving the opened page a handle
+  // back to this window (tabnabbing protection).
+  const linkRenderer = new marked.Renderer();
+  linkRenderer.link = function ({ href, title, tokens }) {
+    const text = this.parser.parseInline(tokens);
+    const titleAttr = title ? ` title="${title}"` : "";
+    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+  };
+
+  marked.setOptions({ breaks: true, gfm: true, renderer: linkRenderer });
 
   function renderMarkdown(text) {
     const raw = marked.parse(text || "");
-    return DOMPurify.sanitize(raw, { ADD_ATTR: ["target"] });
+    return DOMPurify.sanitize(raw, { ADD_ATTR: ["target", "rel"] });
+  }
+
+  // ---- image attachments ----
+  function fileToAttachment(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        // reader.result looks like "data:image/png;base64,AAAA..."
+        const base64 = String(reader.result).split(",", 2)[1] || "";
+        resolve({
+          id: Math.random().toString(36).slice(2),
+          name: file.name,
+          mediaType: file.type,
+          base64,
+        });
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function attachmentError(message) {
+    const banner = document.createElement("div");
+    banner.className = "error-banner";
+    banner.textContent = message;
+    messagesEl.appendChild(banner);
+    scrollToBottom();
+  }
+
+  async function addFiles(fileList) {
+    const files = Array.from(fileList || []).filter((f) =>
+      ALLOWED_IMAGE_TYPES.includes(f.type),
+    );
+    if (!files.length) return;
+
+    for (const file of files) {
+      if (pendingAttachments.length >= MAX_ATTACHMENTS) {
+        attachmentError(
+          `You can attach up to ${MAX_ATTACHMENTS} images per message.`,
+        );
+        break;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        attachmentError(`"${file.name}" is too large (max 5MB).`);
+        continue;
+      }
+      try {
+        const attachment = await fileToAttachment(file);
+        pendingAttachments.push(attachment);
+      } catch (e) {
+        attachmentError(`Could not read "${file.name}".`);
+      }
+    }
+    renderAttachmentPreviews();
+  }
+
+  function removeAttachment(id) {
+    pendingAttachments = pendingAttachments.filter((a) => a.id !== id);
+    renderAttachmentPreviews();
+  }
+
+  function renderAttachmentPreviews() {
+    attachmentPreviewsEl.innerHTML = "";
+    attachmentPreviewsEl.classList.toggle("hidden", !pendingAttachments.length);
+    pendingAttachments.forEach((a) => {
+      const thumb = document.createElement("div");
+      thumb.className = "attachment-thumb";
+
+      const img = document.createElement("img");
+      img.src = `data:${a.mediaType};base64,${a.base64}`;
+      img.alt = a.name;
+      thumb.appendChild(img);
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "attachment-remove";
+      removeBtn.setAttribute("aria-label", "Remove image");
+      removeBtn.textContent = "\u2715";
+      removeBtn.addEventListener("click", () => removeAttachment(a.id));
+      thumb.appendChild(removeBtn);
+
+      attachmentPreviewsEl.appendChild(thumb);
+    });
+  }
+
+  // Renders a user message's content, which may be plain text or an
+  // Anthropic-style content-block array mixing text and images.
+  function renderMessageContent(body, content) {
+    if (typeof content === "string") {
+      body.textContent = content;
+      return;
+    }
+    if (Array.isArray(content)) {
+      content.forEach((block) => {
+        if (!block || typeof block !== "object") return;
+        if (block.type === "text" && block.text) {
+          const div = document.createElement("div");
+          div.className = "msg-text-block";
+          div.textContent = block.text;
+          body.appendChild(div);
+        } else if (block.type === "image" && block.source) {
+          const img = document.createElement("img");
+          img.className = "attachment-img";
+          img.alt = "Attached image";
+          if (block.source.type === "base64") {
+            img.src = `data:${block.source.media_type};base64,${block.source.data}`;
+          } else if (block.source.type === "url" && block.source.url) {
+            img.src = block.source.url;
+          }
+          body.appendChild(img);
+        }
+      });
+      return;
+    }
+    body.textContent = JSON.stringify(content, null, 2);
   }
 
   function scrollToBottom() {
@@ -151,14 +308,14 @@
     resetChatUI();
     if (emptyState) emptyState.classList.add("hidden");
     history.forEach((m) => {
-      const content =
-        typeof m.content === "string"
-          ? m.content
-          : JSON.stringify(m.content, null, 2);
       if (m.role === "user") {
         const body = addMessageRow("user");
-        body.textContent = content;
+        renderMessageContent(body, m.content);
       } else {
+        const content =
+          typeof m.content === "string"
+            ? m.content
+            : JSON.stringify(m.content, null, 2);
         const body = addMessageRow("assistant");
         const span = document.createElement("div");
         span.className = "assistant-text";
@@ -173,9 +330,15 @@
     if (streaming) return;
     try {
       const resp = await fetch("/api/conversations/" + encodeURIComponent(id));
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        if (resp.status === 404 && id === getSavedActiveConversation()) {
+          saveActiveConversation(null);
+        }
+        return;
+      }
       const conv = await resp.json();
       currentConversationId = conv.id;
+      saveActiveConversation(currentConversationId);
       history = Array.isArray(conv.messages) ? conv.messages : [];
       renderHistory();
       renderConversationList();
@@ -193,6 +356,7 @@
       if (!resp.ok) return;
       if (id === currentConversationId) {
         currentConversationId = null;
+        saveActiveConversation(null);
         history = [];
         resetChatUI();
       }
@@ -213,6 +377,7 @@
       if (resp.ok) {
         const data = await resp.json();
         currentConversationId = data.id;
+        saveActiveConversation(currentConversationId);
       }
     } catch (e) {
       /* ignore */
@@ -238,17 +403,35 @@
 
   // ---- send a turn ----
   async function sendMessage(text) {
-    if (streaming || !text.trim()) return;
+    if (streaming || (!text.trim() && !pendingAttachments.length)) return;
     streaming = true;
     sendBtn.disabled = true;
 
+    // Build the Anthropic-style content: plain text when there are no
+    // attachments (backward compatible), or a content-block array of
+    // images + text when the user attached/pasted images.
+    const attachments = pendingAttachments;
+    pendingAttachments = [];
+    renderAttachmentPreviews();
+
+    let content;
+    if (attachments.length) {
+      content = attachments.map((a) => ({
+        type: "image",
+        source: { type: "base64", media_type: a.mediaType, data: a.base64 },
+      }));
+      if (text.trim()) content.push({ type: "text", text });
+    } else {
+      content = text;
+    }
+
     // user bubble
     const userBody = addMessageRow("user");
-    userBody.textContent = text;
-    history.push({ role: "user", content: text });
+    renderMessageContent(userBody, content);
+    history.push({ role: "user", content });
 
     // create a conversation on first message so it shows in the sidebar
-    await ensureConversation(text);
+    await ensureConversation(text || "Image");
 
     // assistant container
     const assistantBody = addMessageRow("assistant");
@@ -395,7 +578,10 @@
     await fetch("/api/logout", { method: "POST" });
     history = [];
     currentConversationId = null;
+    saveActiveConversation(null);
     conversations = [];
+    pendingAttachments = [];
+    renderAttachmentPreviews();
     if (convListEl) convListEl.innerHTML = "";
     messagesEl.innerHTML = "";
     showLogin();
@@ -404,7 +590,10 @@
   newChatBtn.addEventListener("click", () => {
     if (streaming) return;
     currentConversationId = null;
+    saveActiveConversation(null);
     history = [];
+    pendingAttachments = [];
+    renderAttachmentPreviews();
     resetChatUI();
     renderConversationList();
     chatInput.focus();
@@ -413,7 +602,7 @@
   chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const text = chatInput.value.trim();
-    if (!text) return;
+    if (!text && !pendingAttachments.length) return;
     chatInput.value = "";
     autoGrow();
     sendMessage(text);
@@ -432,6 +621,45 @@
   }
   chatInput.addEventListener("input", autoGrow);
 
+  // ---- image attach / paste / drop ----
+  attachBtn.addEventListener("click", () => {
+    if (streaming) return;
+    imageInput.click();
+  });
+
+  imageInput.addEventListener("change", () => {
+    addFiles(imageInput.files);
+    imageInput.value = "";
+  });
+
+  chatInput.addEventListener("paste", (e) => {
+    const items = Array.from(e.clipboardData ? e.clipboardData.items : []);
+    const imageFiles = items
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (imageFiles.length) {
+      e.preventDefault();
+      addFiles(imageFiles);
+    }
+  });
+
+  ["dragover", "dragenter"].forEach((evt) => {
+    chatForm.addEventListener(evt, (e) => {
+      if (
+        e.dataTransfer &&
+        Array.from(e.dataTransfer.types).includes("Files")
+      ) {
+        e.preventDefault();
+      }
+    });
+  });
+  chatForm.addEventListener("drop", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    addFiles(e.dataTransfer.files);
+  });
+
   document.querySelectorAll(".suggestion").forEach((btn) => {
     btn.addEventListener("click", () => {
       chatInput.value = btn.textContent;
@@ -445,6 +673,10 @@
       const resp = await fetch("/api/me");
       if (resp.ok) {
         showChat(await resp.json());
+        const activeConversationId = getSavedActiveConversation();
+        if (activeConversationId) {
+          await openConversation(activeConversationId);
+        }
       } else {
         showLogin();
       }
