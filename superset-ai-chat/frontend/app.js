@@ -48,6 +48,7 @@
   let streaming = false;
   let currentConversationId = null;
   let conversations = [];
+  let activeTaskId = null;
 
   // Keep the selected conversation through a refresh in this browser tab.
   // sessionStorage intentionally scopes the selection to a single tab and
@@ -85,17 +86,10 @@
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
   const MAX_ATTACHMENTS = 4;
 
-  // Force every markdown-rendered link to open in a new tab, with the
-  // recommended rel attributes to avoid giving the opened page a handle
-  // back to this window (tabnabbing protection).
-  const linkRenderer = new marked.Renderer();
-  linkRenderer.link = function ({ href, title, tokens }) {
-    const text = this.parser.parseInline(tokens);
-    const titleAttr = title ? ` title="${title}"` : "";
-    return `<a href="${href}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
-  };
-
-  marked.setOptions({ breaks: true, gfm: true, renderer: linkRenderer });
+  // Let marked use its version-compatible built-in link renderer. The prior
+  // custom callback relied on a parser API that marked@12 does not expose,
+  // causing a runtime error for any assistant response containing a link.
+  marked.setOptions({ breaks: true, gfm: true });
 
   function renderMarkdown(text) {
     const raw = marked.parse(text || "");
@@ -360,6 +354,9 @@
       history = Array.isArray(conv.messages) ? conv.messages : [];
       renderHistory();
       renderConversationList();
+      if (conv.active_task) {
+        showTaskInProgress(conv.active_task.id);
+      }
     } catch (e) {
       /* ignore */
     }
@@ -419,11 +416,61 @@
     loadConversations();
   }
 
+  function setStreaming(value) {
+    streaming = value;
+    sendBtn.disabled = value;
+  }
+
+  function showTaskInProgress(taskId) {
+    if (activeTaskId === taskId) return;
+    activeTaskId = taskId;
+    setStreaming(true);
+    const assistantBody = addMessageRow("assistant");
+    const textSpan = document.createElement("div");
+    textSpan.className = "assistant-text cursor-blink";
+    textSpan.textContent = "Still working on your request…";
+    assistantBody.appendChild(textSpan);
+    monitorTask(taskId, assistantBody, textSpan);
+  }
+
+  async function monitorTask(taskId, assistantBody, textSpan) {
+    try {
+      while (activeTaskId === taskId) {
+        const resp = await fetch("/api/chat/" + encodeURIComponent(taskId));
+        if (!resp.ok) throw new Error("Could not check task status.");
+        const task = await resp.json();
+        if (task.status === "running") {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          continue;
+        }
+        textSpan.classList.remove("cursor-blink");
+        activeTaskId = null;
+        setStreaming(false);
+        if (task.status === "complete") {
+          await openConversation(currentConversationId);
+          return;
+        }
+        const banner = document.createElement("div");
+        banner.className = "error-banner";
+        banner.textContent = task.error || "The chat task did not complete.";
+        assistantBody.appendChild(banner);
+        return;
+      }
+    } catch (err) {
+      textSpan.classList.remove("cursor-blink");
+      activeTaskId = null;
+      setStreaming(false);
+      const banner = document.createElement("div");
+      banner.className = "error-banner";
+      banner.textContent = "Connection error: " + err.message;
+      assistantBody.appendChild(banner);
+    }
+  }
+
   // ---- send a turn ----
   async function sendMessage(text) {
     if (streaming || (!text.trim() && !pendingAttachments.length)) return;
-    streaming = true;
-    sendBtn.disabled = true;
+    setStreaming(true);
 
     // Build the Anthropic-style content: plain text when there are no
     // attachments (backward compatible), or a content-block array of
@@ -460,97 +507,34 @@
     textSpan.className = "assistant-text cursor-blink";
     assistantBody.appendChild(textSpan);
 
-    let assistantText = "";
-    const toolChips = {};
-
     try {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({
+          conversation_id: currentConversationId,
+          messages: history,
+        }),
       });
 
       if (resp.status === 401) {
         showLogin();
         return;
       }
-      if (!resp.ok || !resp.body) {
-        throw new Error("Request failed (" + resp.status + ")");
+      if (!resp.ok) {
+        const error = await resp.json().catch(() => ({}));
+        const detail = Array.isArray(error.detail)
+          ? error.detail
+              .map((item) => item.msg)
+              .filter(Boolean)
+              .join("; ")
+          : error.detail;
+        throw new Error(detail || "Request failed (" + resp.status + ")");
       }
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop();
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (!payload) continue;
-          let evt;
-          try {
-            evt = JSON.parse(payload);
-          } catch (e) {
-            continue;
-          }
-          handleEvent(evt);
-        }
-      }
-
-      function handleEvent(evt) {
-        if (evt.type === "text") {
-          assistantText += evt.text;
-          textSpan.innerHTML = renderMarkdown(assistantText);
-          scrollToBottom();
-        } else if (evt.type === "tool_use") {
-          const chip = document.createElement("div");
-          chip.className = "tool-chip running";
-          chip.innerHTML =
-            '<span class="dot"></span><span>Running <b>' +
-            toolLabel(evt.name) +
-            "</b>…</span>";
-          assistantBody.insertBefore(chip, textSpan);
-          if (!toolChips[evt.name]) toolChips[evt.name] = [];
-          toolChips[evt.name].push(chip);
-          scrollToBottom();
-        } else if (evt.type === "tool_result") {
-          const chips = toolChips[evt.name];
-          const chip = chips && chips.length ? chips.shift() : null;
-          if (chip) {
-            chip.classList.remove("running");
-            if (evt.is_error) {
-              chip.classList.add("error");
-              chip.innerHTML =
-                '<span class="dot"></span><span><b>' +
-                toolLabel(evt.name) +
-                "</b> failed</span>";
-            } else {
-              chip.innerHTML =
-                '<span class="dot"></span><span>Used <b>' +
-                toolLabel(evt.name) +
-                "</b></span>";
-            }
-          }
-        } else if (evt.type === "error") {
-          const banner = document.createElement("div");
-          banner.className = "error-banner";
-          banner.textContent = evt.message || "An error occurred.";
-          assistantBody.appendChild(banner);
-        }
-        // "done" handled after loop
-      }
-
-      // finalize
-      textSpan.classList.remove("cursor-blink");
-      if (assistantText.trim()) {
-        history.push({ role: "assistant", content: assistantText });
-      }
+      const task = await resp.json();
+      activeTaskId = task.task_id;
+      textSpan.textContent = "Working on your request…";
+      monitorTask(task.task_id, assistantBody, textSpan);
     } catch (err) {
       textSpan.classList.remove("cursor-blink");
       const banner = document.createElement("div");
@@ -558,11 +542,11 @@
       banner.textContent = "Connection error: " + err.message;
       assistantBody.appendChild(banner);
     } finally {
-      streaming = false;
-      sendBtn.disabled = false;
+      if (!activeTaskId) {
+        setStreaming(false);
+      }
       chatInput.focus();
       scrollToBottom();
-      persistConversation();
     }
   }
 

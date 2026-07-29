@@ -90,30 +90,24 @@ body {
   font-size: 13px;
 }
 
-.brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  font-size: 24px;
-  color: white;
+.brand-logo {
+  display: block;
+  height: auto;
 }
 
-.brand-mark.small {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  font-size: 16px;
+.login-logo {
+  width: 220px;
+  margin: 0 auto;
 }
 
-.brand-mark.large {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  font-size: 32px;
+.sidebar-logo {
+  width: 176px;
+  max-height: 36px;
+}
+
+.empty-logo {
+  width: 240px;
+  margin: 0 auto 22px;
 }
 
 .login-card label {

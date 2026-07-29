@@ -21,7 +21,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Superset AI Chat</title>
+    <title>Investotech Reporting AI</title>
+    <link
+      rel="icon"
+      type="image/png"
+      href="https://reporting.investotech.com/static/assets/images/favicon.png"
+    />
     <link rel="stylesheet" href="/styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
@@ -31,8 +36,12 @@
     <div id="login-view" class="login-view hidden">
       <form id="login-form" class="login-card">
         <div class="brand">
-          <div class="brand-mark">✦</div>
-          <h1>Superset AI</h1>
+          <img
+            class="brand-logo login-logo"
+            src="/assets/investotech-logo-white.svg"
+            alt="Investotech Reporting"
+          />
+          <h1>Investotech Reporting AI</h1>
           <p>Chat with your data. Build charts and dashboards.</p>
         </div>
         <label>
@@ -64,8 +73,11 @@
     <div id="chat-view" class="chat-view hidden">
       <aside class="sidebar">
         <div class="sidebar-header">
-          <div class="brand-mark small">✦</div>
-          <span>Superset AI</span>
+          <img
+            class="brand-logo sidebar-logo"
+            src="/assets/investotech-logo-white.svg"
+            alt="Investotech Reporting"
+          />
         </div>
         <button id="new-chat-btn" class="new-chat-btn">+ New chat</button>
         <div id="conversation-list" class="conversation-list"></div>
@@ -82,7 +94,11 @@
       <main class="conversation">
         <div id="messages" class="messages">
           <div class="empty-state" id="empty-state">
-            <div class="brand-mark large">✦</div>
+            <img
+              class="brand-logo empty-logo"
+              src="/assets/investotech-logo-white.svg"
+              alt="Investotech Reporting"
+            />
             <h2>How can I help with your data?</h2>
             <div class="suggestions">
               <button class="suggestion">
@@ -128,7 +144,7 @@
             </button>
             <textarea
               id="chat-input"
-              placeholder="Message Superset AI…"
+              placeholder="Message Investotech Reporting AI…"
               rows="1"
               autocomplete="off"
             ></textarea>
@@ -142,6 +158,7 @@
       </main>
     </div>
 
-    <script src="/app.js"></script>
+    <!-- Version this URL whenever the client/server request contract changes. -->
+    <script src="/app.js?v=20260729-2"></script>
   </body>
 </html>
