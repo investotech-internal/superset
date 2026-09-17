@@ -26,6 +26,7 @@ import sys
 
 from celery.schedules import crontab
 from flask_caching.backends.filesystemcache import FileSystemCache
+from superset.config import THEME_DARK, THEME_DEFAULT
 
 logger = logging.getLogger()
 
@@ -111,12 +112,46 @@ FEATURE_FLAGS = {
     "DATASET_FOLDERS": True,
     "ENABLE_EXTENSIONS": True,
     "SEMANTIC_LAYERS": True,
+    "AG_GRID_TABLE_ENABLED": True,
 }
 EXTENSIONS_PATH = "/app/docker/extensions"
 
+# --- Investotech branding ---------------------------------------------------
+APP_NAME = "Investotech"
+# Navbar is dark by default (system/dark theme), so APP_ICON (used as a
+# general-purpose fallback, e.g. for emails) points to the white/cyan variant.
+APP_ICON = "/static/assets/images/investotech-logo-white.svg"
+FAVICONS = [{"href": "/static/assets/images/favicon.png"}]
+
+_INVESTOTECH_BRAND_TOKENS_COMMON = {
+    "brandAppName": APP_NAME,
+    "brandLogoAlt": "Investotech",
+    "brandLogoHeight": "28px",
+    # Investotech brand blue, matched from the logo's "T" mark (#00AAF0).
+    "colorPrimary": "#00AAF0",
+    "colorLink": "#00AAF0",
+    # Branded loading spinner (replaces the default Superset loader animation).
+    "brandSpinnerUrl": "/static/assets/images/investotech-loading.svg",
+}
+THEME_DEFAULT["token"].update(
+    {
+        **_INVESTOTECH_BRAND_TOKENS_COMMON,
+        # Light theme navbar is light-colored, so use the dark-text logo variant.
+        "brandLogoUrl": "/static/assets/images/investotech-logo-dark.svg",
+    }
+)
+if THEME_DARK:
+    THEME_DARK["token"].update(
+        {
+            **_INVESTOTECH_BRAND_TOKENS_COMMON,
+            # Dark theme navbar is dark-colored, so use the white-text logo variant.
+            "brandLogoUrl": APP_ICON,
+        }
+    )
+
 # MCP server (AI agent) configuration for local development.
 # Runs unauthenticated as MCP_DEV_USERNAME -- never use this in production.
-MCP_SERVICE_HOST = "0.0.0.0"
+MCP_SERVICE_HOST = "0.0.0.0"  # noqa: S104 -- must bind all interfaces inside the Docker container
 MCP_SERVICE_PORT = int(os.environ.get("MCP_SERVICE_PORT", "5008"))
 MCP_AUTH_ENABLED = False
 MCP_DEV_USERNAME = os.environ.get("MCP_DEV_USERNAME", "admin")

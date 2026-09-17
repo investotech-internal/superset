@@ -18,14 +18,16 @@
 # Python version installed; we need 3.11-3.12
 PYTHON=`command -v python3.11 || command -v python3.12`
 
-.PHONY: install superset venv pre-commit up down logs ps nuke ports open enable-claude-zai
+.PHONY: install superset venv pre-commit up down logs ps nuke ports open enable-claude-zai run-local run-prod install-deps
 
-install: superset pre-commit
+install: install-deps superset pre-commit
+
+install-deps:
+	@echo "Installing system dependencies..."
+	@./scripts/install-system-deps.sh
 
 superset:
-	# Bootstrap uv (the project's installer) into the active environment
-	pip install uv
-
+	# Use uv from the system (installed via pipx or globally)
 	# Install external dependencies
 	uv pip install -r requirements/development.txt
 
@@ -55,9 +57,7 @@ superset:
 update: update-py update-js
 
 update-py:
-	# Bootstrap uv (the project's installer) into the active environment
-	pip install uv
-
+	# Use uv from the system (installed via pipx or globally)
 	# Install external dependencies
 	uv pip install -r requirements/development.txt
 
@@ -85,7 +85,6 @@ activate:
 
 pre-commit:
 	# setup pre commit dependencies
-	pip install uv
 	uv pip install -r requirements/development.txt
 	pre-commit install
 
@@ -115,7 +114,7 @@ report-celery-worker:
 	celery --app=superset.tasks.celery_app:app worker
 
 report-celery-beat:
-	celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedulecd
+	celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule
 
 admin-user:
 	superset fab create-admin
@@ -144,6 +143,38 @@ ports:
 
 open:
 	./scripts/docker-compose-up.sh open
+
+run-local:
+	@./scripts/install-system-deps.sh
+	@echo "Starting Superset in development mode..."
+	@echo "Backend: http://localhost:8088"
+	@echo "Frontend: http://localhost:9000"
+	@echo ""
+	@echo "Make sure you have:"
+	@echo "  - Python venv activated"
+	@echo "  - Run 'make install' at least once"
+	@echo ""
+	@echo "Starting backend (Flask), frontend dev-server, and Celery worker/beat..."
+	@(trap 'trap - TERM INT; kill 0' TERM INT; \
+	  flask run -p 8088 --reload --debugger & \
+	  (export NVM_DIR="$$HOME/.nvm"; [ -s "$$NVM_DIR/nvm.sh" ] && \. "$$NVM_DIR/nvm.sh"; cd superset-frontend && npm run dev-server) & \
+	  celery --app=superset.tasks.celery_app:app worker & \
+	  celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule & \
+	  wait)
+
+run-prod:
+	@./scripts/install-system-deps.sh
+	@echo "Building and starting Superset in production mode..."
+	@echo "Access: http://localhost:8088"
+	@echo ""
+	@echo "Building frontend assets..."
+	@export NVM_DIR="$$HOME/.nvm"; [ -s "$$NVM_DIR/nvm.sh" ] && \. "$$NVM_DIR/nvm.sh"; cd superset-frontend && npm run build
+	@echo "Starting Gunicorn, Celery worker, and Celery beat..."
+	@(trap 'trap - TERM INT; kill 0' TERM INT; \
+	  gunicorn -w 4 -b 0.0.0.0:8088 "superset.app:create_app()" & \
+	  celery --app=superset.tasks.celery_app:app worker & \
+	  celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid --schedule /tmp/celerybeat-schedule & \
+	  wait)
 
 # Configure Claude Code to use the z.ai GLM Coding Plan as its backend for
 # THIS project only. Writes to .claude/settings.local.json, which is
